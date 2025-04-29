@@ -1,0 +1,135 @@
+import os
+import logging
+import random
+from dotenv import load_dotenv
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+
+# Load environment variables
+load_dotenv()
+
+# Enable logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Game state storage
+user_games = {}
+
+class GameState:
+    def __init__(self):
+        self.target_number = random.randint(1, 100)
+        self.attempts = 0
+        self.max_attempts = 10
+
+# Command handlers
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a message when the command /start is issued."""
+    user = update.effective_user
+    keyboard = [
+        [InlineKeyboardButton("Start New Game", callback_data='start_game')],
+        [InlineKeyboardButton("Help", callback_data='help')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        f'Hi {user.first_name}! Welcome to the Number Guessing Game!\n'
+        'I will think of a number between 1 and 100, and you have to guess it.\n'
+        'You have 10 attempts to guess the correct number.',
+        reply_markup=reply_markup
+    )
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a message when the command /help is issued."""
+    await update.message.reply_text(
+        'How to play:\n'
+        '1. Start a new game using the "Start New Game" button\n'
+        '2. I will think of a number between 1 and 100\n'
+        '3. Send me your guess as a number\n'
+        '4. I will tell you if your guess is too high or too low\n'
+        '5. You have 10 attempts to guess the correct number\n'
+        '6. Use /start to get back to the main menu'
+    )
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle button callbacks."""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == 'start_game':
+        user_id = query.from_user.id
+        user_games[user_id] = GameState()
+        await query.message.edit_text(
+            f'Game started! I am thinking of a number between 1 and 100.\n'
+            f'You have {user_games[user_id].max_attempts} attempts.\n'
+            'Send me your guess!'
+        )
+    elif query.data == 'help':
+        await help_command(update, context)
+
+async def handle_guess(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user's guess."""
+    user_id = update.effective_user.id
+    
+    if user_id not in user_games:
+        await update.message.reply_text(
+            'Please start a new game first using the /start command!'
+        )
+        return
+    
+    try:
+        guess = int(update.message.text)
+        game = user_games[user_id]
+        game.attempts += 1
+        
+        if guess < 1 or guess > 100:
+            await update.message.reply_text('Please enter a number between 1 and 100!')
+            return
+        
+        if guess == game.target_number:
+            keyboard = [[InlineKeyboardButton("Play Again", callback_data='start_game')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                f'Congratulations! You guessed the number {game.target_number} in {game.attempts} attempts!',
+                reply_markup=reply_markup
+            )
+            del user_games[user_id]
+        elif game.attempts >= game.max_attempts:
+            keyboard = [[InlineKeyboardButton("Try Again", callback_data='start_game')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                f'Game Over! The number was {game.target_number}.\n'
+                f'You used all {game.max_attempts} attempts.',
+                reply_markup=reply_markup
+            )
+            del user_games[user_id]
+        else:
+            hint = "too low" if guess < game.target_number else "too high"
+            await update.message.reply_text(
+                f'Your guess is {hint}!\n'
+                f'Attempts remaining: {game.max_attempts - game.attempts}'
+            )
+    except ValueError:
+        await update.message.reply_text('Please enter a valid number!')
+
+def main():
+    """Start the bot."""
+    # Create the Application and pass it your bot's token
+    application = Application.builder().token(os.getenv('BOT_TOKEN')).build()
+
+    # Add command handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    
+    # Add callback query handler for buttons
+    application.add_handler(CallbackQueryHandler(button_callback))
+    
+    # Add message handler for guesses
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_guess))
+
+    # Start the Bot
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == '__main__':
+    main() 
